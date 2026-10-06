@@ -473,30 +473,39 @@ function select(ci, jump) {
 
 // ---------- Zeit und Abspielen
 const sky = $('sky'); let skyOK = false;
-sky.addEventListener('loadeddata', () => { skyOK = true; seekSky(); });
-function seekSky() { if (skyOK && !playing) { try { sky.currentTime = (T + 0.5)/FPS; } catch (e) {} } }
-function setT(tt) { T = Math.max(0, Math.min(nF - 1, tt)); if (playing && skyOK) sky.currentTime = (T + 0.5)/FPS; else seekSky(); draw(); }
+// Die Karte hat ihren eigenen Takt; das Himmelsvideo laeuft mit und wird nachgefuehrt.
+// So bleibt die Karte nicht stehen, wenn das Video online noch nachlaedt.
+let t0 = 0, T0 = 0, lastSync = 0;
+function rebase() { t0 = performance.now(); T0 = T; }
+function skyTo() { try { sky.currentTime = (T + 0.5)/FPS; } catch (e) {} lastSync = performance.now(); }
+sky.addEventListener('loadeddata', () => { skyOK = true; if (playing) { skyTo(); sky.playbackRate = speed; sky.play().catch(() => {}); } else seekSky(); });
+function seekSky() { if (skyOK && !playing) skyTo(); }
+function syncSky() {
+  if (!skyOK) return;
+  if (sky.paused && !sky.ended) { sky.playbackRate = speed; sky.play().catch(() => {}); }
+  if (performance.now() - lastSync > 1500 && Math.abs(sky.currentTime - (T + 0.5)/FPS) > 0.4) skyTo();
+}
+function setT(tt) { T = Math.max(0, Math.min(nF - 1, tt)); if (playing) { rebase(); if (skyOK) skyTo(); } else seekSky(); draw(); }
 $('zeit').max = nF - 1;
 $('zeit').oninput = e => setT(+e.target.value);
-$('tempo').onchange = e => { speed = +e.target.value; sky.playbackRate = speed; };
-let timer = null, lastT = -1;
+$('tempo').onchange = e => { speed = +e.target.value; sky.playbackRate = speed; if (playing) rebase(); };
 function loop() {
   if (!playing) return;
-  if (skyOK) {
-    const tt = Math.min(nF - 1, Math.floor(sky.currentTime*FPS));
-    if (tt !== lastT) { T = tt; lastT = tt; draw(); }
-    if (sky.ended || T >= nF - 1) { toggle(); return; }
-    requestAnimationFrame(loop);
-  }
+  const tt = Math.min(nF - 1, T0 + Math.floor((performance.now() - t0)/1000*FPS*speed));
+  if (tt !== T) { T = tt; draw(); }
+  syncSky();
+  if (T >= nF - 1) { toggle(); return; }
+  requestAnimationFrame(loop);
 }
 function toggle() {
   playing = !playing;
   $('play').textContent = playing ? t('pause') : t('play');
   if (playing) {
     if (T >= nF - 1) T = 0;
-    if (skyOK) { sky.currentTime = (T + 0.5)/FPS; sky.playbackRate = speed; sky.play(); lastT = -1; requestAnimationFrame(loop); }
-    else timer = setInterval(() => { if (T >= nF - 1) { toggle(); return; } T++; draw(); }, 1000/(FPS*speed));
-  } else { sky.pause(); clearInterval(timer); seekSky(); }
+    rebase();
+    if (skyOK) { skyTo(); sky.playbackRate = speed; sky.play().catch(() => {}); }
+    requestAnimationFrame(loop);
+  } else { sky.pause(); seekSky(); }
 }
 $('play').onclick = toggle;
 document.addEventListener('keydown', e => {
